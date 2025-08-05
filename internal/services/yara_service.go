@@ -52,6 +52,7 @@ func (s *YaraService) ListRules(page, limit int, category, platform, isActive st
 func (s *YaraService) CompileRule(ruleID uuid.UUID) error {
 	// Implementation for rule compilation
 	// This would typically involve validating and compiling the YARA rule
+	// For now, just mark as compiled without MinIO storage
 	return s.yaraRepo.MarkCompiled(ruleID)
 }
 
@@ -65,4 +66,4 @@ func (s *YaraService) DeployRule(ruleID uuid.UUID, agentIDs []uuid.UUID) error {
 // GetRuleDeployments returns deployments for a rule
 func (s *YaraService) GetRuleDeployments(ruleID uuid.UUID) ([]models.RuleDeployment, error) {
 	return s.yaraRepo.GetDeployments(ruleID)
-} 
+}

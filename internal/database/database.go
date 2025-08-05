@@ -3,6 +3,7 @@ package database
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"edr-server/internal/config"
@@ -27,7 +28,7 @@ func InitPostgreSQL(cfg config.PostgreSQLConfig) (*gorm.DB, error) {
 
 	// Configure GORM
 	gormConfig := &gorm.Config{
-		Logger: logger.Default.LogMode(logger.Info),
+		Logger: logger.Default.LogMode(logger.Error), // Only log errors, not all SQL queries
 		NowFunc: func() time.Time {
 			return time.Now().UTC()
 		},
@@ -198,6 +199,19 @@ func InitMinIO(cfg config.MinIOConfig) (*minio.Client, error) {
 
 // autoMigrate runs database migrations
 func autoMigrate(db *gorm.DB) error {
+	// First, drop views that might interfere with migrations
+	views := []string{
+		"v_active_agents",
+		"v_recent_alerts",
+		"v_agent_stats",
+		"v_alert_stats",
+		"v_system_health",
+	}
+
+	for _, view := range views {
+		db.Exec(fmt.Sprintf("DROP VIEW IF EXISTS %s CASCADE", view))
+	}
+
 	models := []interface{}{
 		&models.Agent{},
 		&models.YaraRule{},
@@ -223,8 +237,10 @@ func autoMigrate(db *gorm.DB) error {
 		}
 	}
 
-	// Create junction table for many-to-many relationship
-	// This is handled by the AgentGroup model itself
+	// Recreate views after migration
+	if err := CreateViews(db); err != nil {
+		fmt.Printf("Warning: failed to recreate views: %v\n", err)
+	}
 
 	return nil
 }
@@ -281,7 +297,10 @@ func createIndexes(db *gorm.DB) error {
 	for _, indexSQL := range indexes {
 		if err := db.Exec(indexSQL).Error; err != nil {
 			// Log warning but don't fail - index might already exist
-			fmt.Printf("Warning: failed to create index: %v\n", err)
+			// Only log if it's not a "already exists" error
+			if !strings.Contains(err.Error(), "already exists") && !strings.Contains(err.Error(), "duplicate key") {
+				fmt.Printf("Warning: failed to create index: %v\n", err)
+			}
 		}
 	}
 
@@ -294,6 +313,7 @@ func insertDefaultData(db *gorm.DB) error {
 	var count int64
 	db.Model(&models.SystemConfig{}).Count(&count)
 	if count > 0 {
+		fmt.Println("✅ Default data already exists, skipping...")
 		return nil // Data already exists
 	}
 
