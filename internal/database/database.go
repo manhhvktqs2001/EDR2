@@ -101,6 +101,18 @@ func InitInfluxDB(cfg config.InfluxDBConfig) (influxdb2.Client, error) {
 			health.Status, *health.Message)
 	}
 
+	// Verify organization exists
+	orgsAPI := client.OrganizationsAPI()
+	org, err := orgsAPI.FindOrganizationByName(ctx, cfg.Org)
+	if err != nil {
+		client.Close()
+		return nil, fmt.Errorf("failed to find InfluxDB organization: %w", err)
+	}
+	if org == nil {
+		client.Close()
+		return nil, fmt.Errorf("InfluxDB organization '%s' not found", cfg.Org)
+	}
+
 	// Verify bucket exists
 	bucketsAPI := client.BucketsAPI()
 	bucket, err := bucketsAPI.FindBucketByName(ctx, cfg.Bucket)
