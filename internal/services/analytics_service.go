@@ -25,7 +25,7 @@ func NewAnalyticsService(db *gorm.DB, influxDB influxdb2.Client, redis *redis.Cl
 		db:       db,
 		influxDB: influxDB,
 		redis:    redis,
-		org:      "edr",
+		org:      "edr-org",
 		bucket:   "events",
 	}
 }

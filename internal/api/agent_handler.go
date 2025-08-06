@@ -1,6 +1,7 @@
 package api
 
 import (
+	"fmt"
 	"net/http"
 	"strconv"
 
@@ -23,9 +24,17 @@ func NewAgentHandler(agentService *services.AgentService, wsHub *websocket.Hub) 
 	}
 }
 
+// validateAuthToken kiểm tra auth token có hợp lệ không
+func (h *AgentHandler) validateAuthToken(authToken string) bool {
+	// Token cố định cho hệ thống
+	validToken := "edr_system_auth_2025"
+	return authToken == validToken
+}
+
 // Register handles agent registration
 func (h *AgentHandler) Register(c *gin.Context) {
 	var req struct {
+		AuthToken    string                 `json:"auth_token" binding:"required"` // Yêu cầu auth token
 		Hostname     string                 `json:"hostname" binding:"required"`
 		IPAddress    string                 `json:"ip_address"`
 		MACAddress   string                 `json:"mac_address"`
@@ -33,6 +42,7 @@ func (h *AgentHandler) Register(c *gin.Context) {
 		OSVersion    string                 `json:"os_version"`
 		Architecture string                 `json:"architecture"`
 		Version      string                 `json:"version"`
+		SystemInfo   map[string]interface{} `json:"system_info"`
 		Config       map[string]interface{} `json:"config"`
 	}
 
@@ -41,8 +51,32 @@ func (h *AgentHandler) Register(c *gin.Context) {
 		return
 	}
 
+	// Validate auth token
+	if !h.validateAuthToken(req.AuthToken) {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid auth token"})
+		return
+	}
+
+	// Check if MAC address already registered (chỉ check nếu có MAC)
+	if req.MACAddress != "" {
+		exists, existingAgentID, existingAPIKey, err := h.agentService.AgentExistsByMAC(req.MACAddress)
+		if err != nil {
+			// Tiếp tục đăng ký nếu không check được
+		} else if exists {
+			// MAC đã tồn tại, trả về thông tin agent hiện có
+			c.JSON(http.StatusConflict, gin.H{
+				"error":    "agent with this MAC address already registered",
+				"agent_id": existingAgentID,
+				"api_key":  existingAPIKey,
+				"message":  "MAC address already registered",
+			})
+			return
+		}
+	}
+
+	// Đăng ký agent mới
 	agent, err := h.agentService.RegisterAgent(req.Hostname, req.IPAddress, req.MACAddress,
-		req.OSType, req.OSVersion, req.Architecture, req.Version, req.Config)
+		req.OSType, req.OSVersion, req.Architecture, req.Version, req.SystemInfo)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -56,20 +90,18 @@ func (h *AgentHandler) Register(c *gin.Context) {
 	})
 
 	c.JSON(http.StatusCreated, gin.H{
+		"success":  true,
 		"agent_id": agent.ID,
+		"api_key":  agent.APIKey,
 		"config":   agent.Config,
+		"message":  "Agent registered successfully",
 	})
 }
 
 // Heartbeat handles agent heartbeat
 func (h *AgentHandler) Heartbeat(c *gin.Context) {
-	agentID := c.Param("id")
-	if agentID == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "agent_id is required"})
-		return
-	}
-
 	var req struct {
+		AgentID string                 `json:"agent_id" binding:"required"`
 		Status  string                 `json:"status"`
 		Metrics map[string]interface{} `json:"metrics"`
 	}
@@ -79,7 +111,7 @@ func (h *AgentHandler) Heartbeat(c *gin.Context) {
 		return
 	}
 
-	id, err := uuid.Parse(agentID)
+	id, err := uuid.Parse(req.AgentID)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid agent_id"})
 		return
@@ -242,6 +274,56 @@ func (h *AgentHandler) Update(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"status": "updated"})
+}
+
+// CheckExistsByMAC checks if an agent exists by MAC address (requires auth)
+func (h *AgentHandler) CheckExistsByMAC(c *gin.Context) {
+	// Kiểm tra Authorization header
+	authHeader := c.GetHeader("Authorization")
+	if authHeader == "" {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "authorization header required"})
+		return
+	}
+
+	// Extract token from "Bearer <token>"
+	token := ""
+	if len(authHeader) > 7 && authHeader[:7] == "Bearer " {
+		token = authHeader[7:]
+	}
+
+	if !h.validateAuthToken(token) {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid auth token"})
+		return
+	}
+
+	macAddress := c.Query("mac")
+	if macAddress == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "mac address is required"})
+		return
+	}
+
+	exists, agentID, apiKey, err := h.agentService.AgentExistsByMAC(macAddress)
+	if err != nil {
+		fmt.Printf("Failed to check MAC address: %v\n", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to check agent existence"})
+		return
+	}
+
+	if exists {
+		c.JSON(http.StatusOK, gin.H{
+			"exists":   true,
+			"agent_id": agentID,
+			"api_key":  apiKey,
+			"status":   "found",
+		})
+	} else {
+		// Trả về 404 khi không tìm thấy MAC
+		c.JSON(http.StatusNotFound, gin.H{
+			"exists":  false,
+			"status":  "not_found",
+			"message": "MAC address not found in database",
+		})
+	}
 }
 
 // Delete deletes an agent

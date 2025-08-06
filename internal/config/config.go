@@ -161,10 +161,12 @@ func setDefaults() {
 	viper.SetDefault("database.postgresql.max_open_conns", 100)
 	viper.SetDefault("database.postgresql.conn_max_lifetime", 3600)
 
+	// InfluxDB defaults
 	viper.SetDefault("database.influxdb.url", "http://localhost:8086")
-	viper.SetDefault("database.influxdb.org", "edr")
+	viper.SetDefault("database.influxdb.token", "")
+	viper.SetDefault("database.influxdb.org", "edr-org")
 	viper.SetDefault("database.influxdb.bucket", "events")
-	viper.SetDefault("database.influxdb.retention_days", 90)
+	viper.SetDefault("database.influxdb.retention_days", 30)
 	viper.SetDefault("database.influxdb.batch_size", 1000)
 
 	viper.SetDefault("database.redis.address", "localhost:6379")
@@ -310,9 +312,9 @@ func GetConfigTemplate() *Config {
 			},
 			InfluxDB: InfluxDBConfig{
 				URL:           "http://localhost:8086",
-				Org:           "edr",
+				Org:           "edr-org",
 				Bucket:        "events",
-				RetentionDays: 90,
+				RetentionDays: 30,
 				BatchSize:     1000,
 			},
 			Redis: RedisConfig{

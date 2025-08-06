@@ -57,6 +57,7 @@ type Agent struct {
 	Config            JSONB          `json:"config" gorm:"type:jsonb;default:'{}'"`
 	Metadata          JSONB          `json:"metadata" gorm:"type:jsonb;default:'{}'"`
 	APIKey            string         `json:"api_key" gorm:"size:64;unique;index"`
+	IsActive          bool           `json:"is_active" gorm:"default:true;index"`
 	CreatedAt         time.Time      `json:"created_at"`
 	UpdatedAt         time.Time      `json:"updated_at"`
 
@@ -343,11 +344,13 @@ func (al *Alert) BeforeCreate(tx *gorm.DB) error {
 
 // Helper methods for status checks
 func (a *Agent) IsOnline() bool {
-	return a.Status == "online" && time.Since(a.LastSeen) < 5*time.Minute
+	// Agent is online if status is "online" and last seen within 2 minutes
+	return a.Status == "online" && time.Since(a.LastSeen) < 2*time.Minute
 }
 
 func (a *Agent) IsOffline() bool {
-	return a.Status == "offline" || time.Since(a.LastSeen) > time.Duration(a.HeartbeatInterval*3)*time.Second
+	// Agent is offline if status is "offline" or last seen more than 2 minutes ago
+	return a.Status == "offline" || time.Since(a.LastSeen) > 2*time.Minute
 }
 
 func (al *Alert) IsNew() bool {
@@ -452,6 +455,35 @@ type ThreatHuntQuery struct {
 	Results     JSONB     `json:"results" gorm:"type:jsonb;default:'[]'"`
 }
 
+// EventStatistics represents event statistics from InfluxDB
+type EventStatistics struct {
+	ID              uuid.UUID `json:"id" gorm:"type:uuid;primary_key;default:uuid_generate_v4()"`
+	AgentID         uuid.UUID `json:"agent_id" gorm:"not null;index"`
+	Date            time.Time `json:"date" gorm:"not null;index"`
+	EventType       string    `json:"event_type" gorm:"not null;size:50"`
+	EventCount      int       `json:"event_count" gorm:"default:0"`
+	FileEvents      int       `json:"file_events" gorm:"default:0"`
+	ProcessEvents   int       `json:"process_events" gorm:"default:0"`
+	NetworkEvents   int       `json:"network_events" gorm:"default:0"`
+	RegistryEvents  int       `json:"registry_events" gorm:"default:0"`
+	MaliciousEvents int       `json:"malicious_events" gorm:"default:0"`
+	CreatedAt       time.Time `json:"created_at" gorm:"default:now()"`
+
+	// Relationships
+	Agent Agent `json:"agent,omitempty" gorm:"foreignKey:AgentID"`
+}
+
+// AgentGroupMember represents many-to-many relationship between agents and groups
+type AgentGroupMember struct {
+	AgentID  uuid.UUID `json:"agent_id" gorm:"not null;primary_key"`
+	GroupID  uuid.UUID `json:"group_id" gorm:"not null;primary_key"`
+	JoinedAt time.Time `json:"joined_at" gorm:"default:now()"`
+
+	// Relationships
+	Agent Agent      `json:"agent,omitempty" gorm:"foreignKey:AgentID"`
+	Group AgentGroup `json:"group,omitempty" gorm:"foreignKey:GroupID"`
+}
+
 // ThreatHuntResult represents a threat hunting result
 type ThreatHuntResult struct {
 	ID          uuid.UUID `json:"id" gorm:"type:uuid;primary_key;default:uuid_generate_v4()"`
@@ -548,33 +580,4 @@ type SystemHealth struct {
 	MemoryUsage    float64   `json:"memory_usage"`
 	CPUUsage       float64   `json:"cpu_usage"`
 	DiskUsage      float64   `json:"disk_usage"`
-}
-
-// EventStatistics represents event statistics from InfluxDB
-type EventStatistics struct {
-	ID              uuid.UUID `json:"id" gorm:"type:uuid;primary_key;default:uuid_generate_v4()"`
-	AgentID         uuid.UUID `json:"agent_id" gorm:"not null;index"`
-	Date            time.Time `json:"date" gorm:"not null;index"`
-	EventType       string    `json:"event_type" gorm:"not null;size:50"`
-	EventCount      int       `json:"event_count" gorm:"default:0"`
-	FileEvents      int       `json:"file_events" gorm:"default:0"`
-	ProcessEvents   int       `json:"process_events" gorm:"default:0"`
-	NetworkEvents   int       `json:"network_events" gorm:"default:0"`
-	RegistryEvents  int       `json:"registry_events" gorm:"default:0"`
-	MaliciousEvents int       `json:"malicious_events" gorm:"default:0"`
-	CreatedAt       time.Time `json:"created_at" gorm:"default:now()"`
-
-	// Relationships
-	Agent Agent `json:"agent,omitempty" gorm:"foreignKey:AgentID"`
-}
-
-// AgentGroupMember represents many-to-many relationship between agents and groups
-type AgentGroupMember struct {
-	AgentID  uuid.UUID `json:"agent_id" gorm:"not null;primary_key"`
-	GroupID  uuid.UUID `json:"group_id" gorm:"not null;primary_key"`
-	JoinedAt time.Time `json:"joined_at" gorm:"default:now()"`
-
-	// Relationships
-	Agent Agent      `json:"agent,omitempty" gorm:"foreignKey:AgentID"`
-	Group AgentGroup `json:"group,omitempty" gorm:"foreignKey:GroupID"`
 }

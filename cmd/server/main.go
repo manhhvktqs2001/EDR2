@@ -31,12 +31,21 @@ var startTime = time.Now()
 
 // checkService checks if a service is running on a specific port
 func checkService(port string) bool {
-	conn, err := net.DialTimeout("tcp", "localhost:"+port, 2*time.Second)
-	if err != nil {
-		return false
+	// Try multiple addresses to check if service is running
+	addresses := []string{
+		"localhost:" + port,
+		"127.0.0.1:" + port,
+		"0.0.0.0:" + port,
 	}
-	defer conn.Close()
-	return true
+
+	for _, addr := range addresses {
+		conn, err := net.DialTimeout("tcp", addr, 1*time.Second)
+		if err == nil {
+			conn.Close()
+			return true
+		}
+	}
+	return false
 }
 
 // startRedis starts Redis server if not running
@@ -89,23 +98,74 @@ func startMinIO() {
 	}
 
 	log.Println("🚀 Starting MinIO server...")
+
 	// Create data directory if it doesn't exist
 	dataDir := "C:\\minio-data"
 	if _, err := os.Stat(dataDir); os.IsNotExist(err) {
-		os.MkdirAll(dataDir, 0755)
+		if err := os.MkdirAll(dataDir, 0755); err != nil {
+			log.Printf("⚠️  Failed to create MinIO data directory: %v", err)
+			return
+		}
 	}
 
-	cmd := exec.Command("minio.exe", "server", dataDir, "--address", ":9000", "--console-address", ":9001")
-	cmd.Start()
-
-	// Wait a bit for MinIO to start
-	time.Sleep(5 * time.Second)
-
-	if checkService("9000") {
-		log.Println("✅ MinIO started successfully")
-	} else {
-		log.Println("⚠️  MinIO failed to start (may not be installed)")
+	// Try different paths for minio.exe
+	minioPaths := []string{
+		"C:\\minio-data\\minio.exe",
+		"minio.exe",
+		"C:\\Program Files\\MinIO\\minio.exe",
+		"C:\\Program Files (x86)\\MinIO\\minio.exe",
 	}
+
+	var minioPath string
+	for _, path := range minioPaths {
+		if _, err := os.Stat(path); err == nil {
+			minioPath = path
+			log.Printf("🔍 Found MinIO at: %s", path)
+			break
+		}
+	}
+
+	if minioPath == "" {
+		log.Println("⚠️  MinIO not found, please install MinIO or place minio.exe in C:\\minio-data\\")
+		log.Println("📥 Download MinIO from: https://min.io/download")
+		return
+	}
+
+	// Kill any existing MinIO processes
+	exec.Command("taskkill", "/F", "/IM", "minio.exe").Run()
+
+	// Start MinIO server
+	cmd := exec.Command(minioPath, "server", dataDir, "--address", ":9000", "--console-address", ":9001")
+	cmd.Dir = dataDir
+
+	// Set environment variables for better compatibility
+	cmd.Env = append(os.Environ(),
+		"MINIO_ROOT_USER=minioadmin",
+		"MINIO_ROOT_PASSWORD=minioadmin",
+	)
+
+	// Start in background
+	if err := cmd.Start(); err != nil {
+		log.Printf("⚠️  Failed to start MinIO: %v", err)
+		return
+	}
+
+	// Wait longer for MinIO to start
+	log.Println("⏳ Waiting for MinIO to start...")
+	time.Sleep(10 * time.Second)
+
+	// Check multiple times if MinIO is running
+	for i := 0; i < 5; i++ {
+		if checkService("9000") {
+			log.Println("✅ MinIO started successfully")
+			log.Println("🌐 MinIO Console available at: http://localhost:9001")
+			log.Println("🔑 Default credentials: minioadmin / minioadmin")
+			return
+		}
+		time.Sleep(2 * time.Second)
+	}
+
+	log.Println("⚠️  MinIO failed to start after multiple attempts")
 }
 
 func main() {
@@ -338,12 +398,13 @@ func setupRouter(cfg *config.Config, agentService *services.AgentService,
 
 		// Agent management endpoints (agent authentication)
 		agentRouter := apiRouter.Group("/agents")
-		agentRouter.Use(authMiddleware.AgentAuth())
 		{
 			agentHandler := api.NewAgentHandler(agentService, wsHub)
 
 			// Agent self-service endpoints (used by agents)
-			agentRouter.POST("/register", agentHandler.Register)
+			agentRouter.POST("/register", agentHandler.Register)            // No auth for registration
+			agentRouter.GET("/check-by-mac", agentHandler.CheckExistsByMAC) // No auth for checking by MAC
+			agentRouter.Use(authMiddleware.AgentAuth())                     // Apply auth to other agent endpoints
 			agentRouter.POST("/heartbeat", agentHandler.Heartbeat)
 			agentRouter.POST("/events", agentHandler.ReceiveEvents)
 			agentRouter.GET("/:id/tasks", agentHandler.GetTasks)

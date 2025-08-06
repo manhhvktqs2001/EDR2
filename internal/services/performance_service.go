@@ -28,7 +28,7 @@ func NewPerformanceService(db *gorm.DB, influxDB influxdb2.Client, redis *redis.
 		db:       db,
 		influxDB: influxDB,
 		redis:    redis,
-		org:      "edr",
+		org:      "edr-org",
 		bucket:   "events",
 	}
 }
@@ -227,7 +227,7 @@ func (s *PerformanceService) LogRotation(ctx context.Context) error {
 
 	// Rotate log files
 	logFiles := []string{"edr-server.log", "access.log", "error.log"}
-	
+
 	for _, logFile := range logFiles {
 		if err := s.rotateLogFile(logDir, logFile); err != nil {
 			log.Printf("Warning: Failed to rotate log file %s: %v", logFile, err)
@@ -240,7 +240,7 @@ func (s *PerformanceService) LogRotation(ctx context.Context) error {
 // rotateLogFile rotates a single log file
 func (s *PerformanceService) rotateLogFile(logDir, filename string) error {
 	logPath := filepath.Join(logDir, filename)
-	
+
 	// Check if file exists and is larger than 10MB
 	info, err := os.Stat(logPath)
 	if err != nil {
@@ -255,17 +255,17 @@ func (s *PerformanceService) rotateLogFile(logDir, filename string) error {
 		// Create backup filename with timestamp
 		backupName := fmt.Sprintf("%s.%s", filename, time.Now().Format("2006-01-02-15-04-05"))
 		backupPath := filepath.Join(logDir, backupName)
-		
+
 		// Move current file to backup
 		if err := os.Rename(logPath, backupPath); err != nil {
 			return fmt.Errorf("failed to rotate log file: %w", err)
 		}
-		
+
 		// Create new empty log file
 		if _, err := os.Create(logPath); err != nil {
 			return fmt.Errorf("failed to create new log file: %w", err)
 		}
-		
+
 		log.Printf("Rotated log file: %s -> %s", filename, backupName)
 	}
 
@@ -294,16 +294,14 @@ func (s *PerformanceService) RetentionPolicy(ctx context.Context) error {
 
 	// Clean up old events from InfluxDB (keep for 30 days)
 	eventRetention := time.Now().AddDate(0, 0, -30)
-	query := fmt.Sprintf(`
-		delete from bucket: "events"
-		start: %s
-		stop: now()
-	`, eventRetention.Format(time.RFC3339))
 
-	queryAPI := s.influxDB.QueryAPI(s.org)
-	_, err := queryAPI.Query(ctx, query)
+	// Use InfluxDB delete API instead of Flux query
+	deleteAPI := s.influxDB.DeleteAPI()
+	err := deleteAPI.DeleteWithName(ctx, s.org, s.bucket, eventRetention, time.Now(), "")
 	if err != nil {
 		log.Printf("Warning: Failed to clean up old events: %v", err)
+	} else {
+		log.Printf("Info: Successfully cleaned up events older than %s", eventRetention.Format("2006-01-02"))
 	}
 
 	return nil
@@ -406,4 +404,4 @@ func (s *PerformanceService) StartMonitoring(ctx context.Context) {
 			}
 		}
 	}
-} 
+}

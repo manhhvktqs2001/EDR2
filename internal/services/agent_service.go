@@ -31,7 +31,10 @@ func NewAgentService(db *gorm.DB, redisClient *redis.Client) *AgentService {
 }
 
 // RegisterAgent registers a new agent
-func (s *AgentService) RegisterAgent(hostname, ipAddress, macAddress, osType, osVersion, architecture, version string, config map[string]interface{}) (*models.Agent, error) {
+func (s *AgentService) RegisterAgent(hostname, ipAddress, macAddress, osType, osVersion, architecture, version string, systemInfo map[string]interface{}) (*models.Agent, error) {
+	// Generate API key for the agent
+	apiKey := s.generateAPIKey()
+
 	agent := &models.Agent{
 		ID:                uuid.New(),
 		Hostname:          hostname,
@@ -45,8 +48,10 @@ func (s *AgentService) RegisterAgent(hostname, ipAddress, macAddress, osType, os
 		LastSeen:          time.Now(),
 		FirstSeen:         time.Now(),
 		HeartbeatInterval: 30,
-		Config:            models.JSONB(config),
-		Metadata:          models.JSONB{},
+		Config:            models.JSONB{},
+		Metadata:          models.JSONB(systemInfo),
+		APIKey:            apiKey,
+		IsActive:          true,
 		CreatedAt:         time.Now(),
 		UpdatedAt:         time.Now(),
 	}
@@ -57,6 +62,29 @@ func (s *AgentService) RegisterAgent(hostname, ipAddress, macAddress, osType, os
 	}
 
 	return agent, nil
+}
+
+// AgentExistsByMAC checks if an agent exists by MAC address
+func (s *AgentService) AgentExistsByMAC(macAddress string) (bool, string, string, error) {
+	agent, err := s.agentRepo.GetByMAC(macAddress)
+	if err != nil {
+		if err == gorm.ErrRecordNotFound {
+			return false, "", "", nil
+		}
+		return false, "", "", fmt.Errorf("failed to check agent existence by MAC: %w", err)
+	}
+	return true, agent.ID.String(), agent.APIKey, nil
+}
+
+// generateAPIKey generates a secure API key
+func (s *AgentService) generateAPIKey() string {
+	// Generate a 64-character random string
+	const charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+	b := make([]byte, 64)
+	for i := range b {
+		b[i] = charset[time.Now().UnixNano()%int64(len(charset))]
+	}
+	return string(b)
 }
 
 // ProcessHeartbeat processes agent heartbeat
@@ -164,7 +192,8 @@ func (s *AgentService) GetAgentStatus(agentID uuid.UUID) (map[string]interface{}
 
 // StartHeartbeatMonitor starts monitoring agent heartbeats
 func (s *AgentService) StartHeartbeatMonitor() {
-	ticker := time.NewTicker(5 * time.Minute)
+	// Check every 30 seconds for real-time updates
+	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
 
 	for range ticker.C {
@@ -173,8 +202,8 @@ func (s *AgentService) StartHeartbeatMonitor() {
 }
 
 func (s *AgentService) checkOfflineAgents() {
-	// Check for agents that haven't sent heartbeat in timeout period
-	timeout := 5 * time.Minute
+	// Reduce timeout to 2 minutes for faster detection
+	timeout := 2 * time.Minute
 	cutoff := time.Now().Add(-timeout)
 
 	err := s.agentRepo.MarkOfflineAgents(cutoff)

@@ -26,6 +26,12 @@ func (r *AgentRepository) GetByID(id uuid.UUID) (*models.Agent, error) {
 	return &agent, err
 }
 
+func (r *AgentRepository) GetByMAC(macAddress string) (*models.Agent, error) {
+	var agent models.Agent
+	err := r.db.Where("mac_address = ?", macAddress).First(&agent).Error
+	return &agent, err
+}
+
 func (r *AgentRepository) Update(id uuid.UUID, updates map[string]interface{}) error {
 	return r.db.Model(&models.Agent{}).Where("id = ?", id).Updates(updates).Error
 }
