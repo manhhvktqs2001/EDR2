@@ -18,6 +18,7 @@ type AgentService struct {
 	agentRepo   *repositories.AgentRepository
 	taskRepo    *repositories.TaskRepository
 	configRepo  *repositories.ConfigRepository
+	eventService *EventService
 }
 
 func NewAgentService(db *gorm.DB, redisClient *redis.Client) *AgentService {
@@ -27,7 +28,13 @@ func NewAgentService(db *gorm.DB, redisClient *redis.Client) *AgentService {
 		agentRepo:   repositories.NewAgentRepository(db),
 		taskRepo:    repositories.NewTaskRepository(db),
 		configRepo:  repositories.NewConfigRepository(db),
+		eventService: nil, // Will be set after EventService is created
 	}
+}
+
+// SetEventService sets the event service for processing events
+func (s *AgentService) SetEventService(eventService *EventService) {
+	s.eventService = eventService
 }
 
 // RegisterAgent registers a new agent
@@ -111,8 +118,15 @@ func (s *AgentService) ProcessHeartbeat(agentID uuid.UUID, status string, metric
 
 // ProcessEvents processes events from agent
 func (s *AgentService) ProcessEvents(agentID uuid.UUID, events []map[string]interface{}) error {
-	// This would typically involve storing events in InfluxDB
-	// and potentially triggering alerts based on YARA rules
+	// Convert UUID to string for EventService
+	agentIDStr := agentID.String()
+	
+	// Use EventService to process and store events in InfluxDB
+	if s.eventService != nil {
+		return s.eventService.ProcessEvents(agentIDStr, events)
+	}
+	
+	// Fallback: just log events if EventService not available
 	for _, event := range events {
 		// Process each event
 		_ = event

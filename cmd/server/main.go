@@ -250,6 +250,9 @@ func main() {
 	quarantineService := services.NewQuarantineService(db, minioClient)
 	quarantineHandler := api.NewQuarantineHandler(quarantineService)
 
+	// Connect AgentService with EventService for event processing
+	agentService.SetEventService(eventService)
+
 	// Initialize analytics service
 	analyticsService := services.NewAnalyticsService(db, influxDB, redisClient)
 	analyticsHandler := api.NewAnalyticsHandler(analyticsService)
@@ -399,7 +402,7 @@ func setupRouter(cfg *config.Config, agentService *services.AgentService,
 		// Agent management endpoints (agent authentication)
 		agentRouter := apiRouter.Group("/agents")
 		{
-			agentHandler := api.NewAgentHandler(agentService, wsHub)
+			agentHandler := api.NewAgentHandler(agentService, wsHub, alertService)
 
 			// Agent self-service endpoints (used by agents)
 			agentRouter.POST("/register", agentHandler.Register)            // No auth for registration
@@ -407,6 +410,7 @@ func setupRouter(cfg *config.Config, agentService *services.AgentService,
 			agentRouter.Use(authMiddleware.AgentAuth())                     // Apply auth to other agent endpoints
 			agentRouter.POST("/heartbeat", agentHandler.Heartbeat)
 			agentRouter.POST("/events", agentHandler.ReceiveEvents)
+			agentRouter.POST("/alerts", agentHandler.ReceiveAlerts) // New endpoint for alerts
 			agentRouter.GET("/:id/tasks", agentHandler.GetTasks)
 			agentRouter.POST("/:id/tasks/:taskId/result", agentHandler.SubmitTaskResult)
 

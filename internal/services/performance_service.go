@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"edr-server/internal/models"
@@ -296,12 +297,21 @@ func (s *PerformanceService) RetentionPolicy(ctx context.Context) error {
 	eventRetention := time.Now().AddDate(0, 0, -30)
 
 	// Use InfluxDB delete API instead of Flux query
-	deleteAPI := s.influxDB.DeleteAPI()
-	err := deleteAPI.DeleteWithName(ctx, s.org, s.bucket, eventRetention, time.Now(), "")
-	if err != nil {
-		log.Printf("Warning: Failed to clean up old events: %v", err)
+	if s.influxDB != nil {
+		deleteAPI := s.influxDB.DeleteAPI()
+		err := deleteAPI.DeleteWithName(ctx, s.org, s.bucket, eventRetention, time.Now(), "")
+		if err != nil {
+			// Check if it's a permission error
+			if strings.Contains(err.Error(), "Access is denied") || strings.Contains(err.Error(), "permission") {
+				log.Printf("Warning: InfluxDB permission error during cleanup. Run fix_influxdb_permissions.ps1 script: %v", err)
+			} else {
+				log.Printf("Warning: Failed to clean up old events: %v", err)
+			}
+		} else {
+			log.Printf("Info: Successfully cleaned up events older than %s", eventRetention.Format("2006-01-02"))
+		}
 	} else {
-		log.Printf("Info: Successfully cleaned up events older than %s", eventRetention.Format("2006-01-02"))
+		log.Printf("Info: InfluxDB not available, skipping event cleanup")
 	}
 
 	return nil

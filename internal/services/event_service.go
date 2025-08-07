@@ -9,13 +9,15 @@ import (
 
 	"github.com/go-redis/redis/v8"
 	"github.com/google/uuid"
-	"github.com/influxdata/influxdb-client-go/v2"
+	influxdb2 "github.com/influxdata/influxdb-client-go/v2"
 )
 
 type EventService struct {
 	influxClient influxdb2.Client
 	redisClient  *redis.Client
 	eventRepo    *repositories.EventRepository
+	org          string
+	bucket       string
 }
 
 func NewEventService(influxClient influxdb2.Client, redisClient *redis.Client) *EventService {
@@ -23,13 +25,62 @@ func NewEventService(influxClient influxdb2.Client, redisClient *redis.Client) *
 		influxClient: influxClient,
 		redisClient:  redisClient,
 		eventRepo:    repositories.NewEventRepository(nil), // Event repo doesn't need DB
+		org:          "edr-org",
+		bucket:       "events",
 	}
 }
 
-// StoreEvent stores an event
+// StoreEvent stores an event in InfluxDB
 func (s *EventService) StoreEvent(event *models.Event) error {
-	// Implementation for storing events in InfluxDB
-	// This would typically involve writing to InfluxDB
+	if s.influxClient == nil {
+		return nil // Skip if InfluxDB not available
+	}
+
+	ctx := context.Background()
+	writeAPI := s.influxClient.WriteAPIBlocking(s.org, s.bucket)
+
+	// Create InfluxDB point
+	point := influxdb2.NewPoint(
+		"security_events",
+		map[string]string{
+			"agent_id":   event.AgentID,
+			"event_type": event.EventType,
+		},
+		map[string]interface{}{
+			"timestamp": event.Timestamp.Unix(),
+			"data":      event.Data,
+		},
+		event.Timestamp,
+	)
+
+	writeAPI.WritePoint(ctx, point)
+	return writeAPI.Flush(ctx)
+}
+
+// ProcessEvents processes events from agent and stores them in InfluxDB
+func (s *EventService) ProcessEvents(agentID string, events []map[string]interface{}) error {
+	for _, eventData := range events {
+		// Extract event information
+		eventType, _ := eventData["event_type"].(string)
+		if eventType == "" {
+			eventType = "unknown"
+		}
+
+		// Create event model
+		event := &models.Event{
+			AgentID:   agentID,
+			EventType: eventType,
+			Timestamp: time.Now(),
+			Data:      eventData,
+		}
+
+		// Store event in InfluxDB
+		if err := s.StoreEvent(event); err != nil {
+			// Log error but continue processing other events
+			continue
+		}
+	}
+
 	return nil
 }
 

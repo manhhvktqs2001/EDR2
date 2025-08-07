@@ -4,7 +4,9 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"time"
 
+	"edr-server/internal/models"
 	"edr-server/internal/services"
 	"edr-server/internal/websocket"
 
@@ -15,12 +17,14 @@ import (
 type AgentHandler struct {
 	agentService *services.AgentService
 	wsHub        *websocket.Hub
+	alertService *services.AlertService
 }
 
-func NewAgentHandler(agentService *services.AgentService, wsHub *websocket.Hub) *AgentHandler {
+func NewAgentHandler(agentService *services.AgentService, wsHub *websocket.Hub, alertService *services.AlertService) *AgentHandler {
 	return &AgentHandler{
 		agentService: agentService,
 		wsHub:        wsHub,
+		alertService: alertService,
 	}
 }
 
@@ -131,31 +135,146 @@ func (h *AgentHandler) Heartbeat(c *gin.Context) {
 
 // ReceiveEvents handles events from agents
 func (h *AgentHandler) ReceiveEvents(c *gin.Context) {
+	// Lấy agent ID từ header
 	agentID := c.GetHeader("X-Agent-ID")
 	if agentID == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "X-Agent-ID header is required"})
+		// Thử lấy từ context (nếu có middleware auth)
+		if agentIDFromContext, exists := c.Get("agent_id"); exists {
+			agentID = fmt.Sprintf("%v", agentIDFromContext)
+		}
+	}
+
+	if agentID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": "X-Agent-ID header is required or agent not authenticated",
+		})
 		return
 	}
 
+	// Kiểm tra định dạng UUID
+	agentUUID, err := uuid.Parse(agentID)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": "invalid agent_id format: must be a valid UUID",
+		})
+		return
+	}
+
+	// Đọc và parse body
 	var events []map[string]interface{}
 	if err := c.ShouldBindJSON(&events); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error":   "invalid JSON format in request body",
+			"details": err.Error(),
+		})
+		return
+	}
+
+	// Kiểm tra mảng events không rỗng
+	if len(events) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": "events array cannot be empty",
+		})
+		return
+	}
+
+	// Log để debug
+	fmt.Printf("Received %d events from agent %s\n", len(events), agentID)
+
+	// Xử lý events
+	err = h.agentService.ProcessEvents(agentUUID, events)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error":   "failed to process events",
+			"details": err.Error(),
+		})
+		return
+	}
+
+	// Trả về thành công
+	c.JSON(http.StatusOK, gin.H{
+		"status":       "events_received",
+		"events_count": len(events),
+		"agent_id":     agentID,
+	})
+}
+
+// ReceiveAlerts handles alerts from agents
+func (h *AgentHandler) ReceiveAlerts(c *gin.Context) {
+	var req struct {
+		AgentID       string                 `json:"agent_id" binding:"required"`
+		RuleName      string                 `json:"rule_name"`
+		Severity      int                    `json:"severity"`
+		Title         string                 `json:"title"`
+		Description   string                 `json:"description"`
+		FilePath      string                 `json:"file_path"`
+		FileName      string                 `json:"file_name"`
+		FileHash      string                 `json:"file_hash"`
+		FileSize      int64                  `json:"file_size"`
+		DetectionTime string                 `json:"detection_time"`
+		Status        string                 `json:"status"`
+		EventType     string                 `json:"event_type"`
+		Metadata      map[string]interface{} `json:"metadata"`
+	}
+
+	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
-	id, err := uuid.Parse(agentID)
+	// Parse agent ID
+	agentID, err := uuid.Parse(req.AgentID)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid agent_id"})
 		return
 	}
 
-	err = h.agentService.ProcessEvents(id, events)
+	// Parse detection time
+	detectionTime, err := time.Parse(time.RFC3339, req.DetectionTime)
+	if err != nil {
+		detectionTime = time.Now()
+	}
+
+	// Create alert
+	alert := &models.Alert{
+		AgentID:       agentID,
+		Severity:      req.Severity,
+		Title:         req.Title,
+		Description:   req.Description,
+		FilePath:      req.FilePath,
+		FileName:      req.FileName,
+		FileHash:      req.FileHash,
+		FileSize:      &req.FileSize,
+		DetectionTime: detectionTime,
+		Status:        req.Status,
+		CreatedAt:     time.Now(),
+		UpdatedAt:     time.Now(),
+	}
+
+	// Save alert to database
+	err = h.alertService.CreateAlert(alert)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"status": "events_received"})
+	// Broadcast alert to connected clients
+	h.wsHub.Broadcast("new_alert", map[string]interface{}{
+		"alert_id":   alert.ID,
+		"agent_id":   alert.AgentID,
+		"title":      alert.Title,
+		"severity":   alert.Severity,
+		"status":     alert.Status,
+		"created_at": alert.CreatedAt,
+		"file_name":  alert.FileName,
+		"rule_name":  req.RuleName,
+	})
+
+	c.JSON(http.StatusCreated, gin.H{
+		"success":  true,
+		"alert_id": alert.ID,
+		"message":  "Alert created successfully",
+	})
 }
 
 // GetTasks returns pending tasks for an agent
